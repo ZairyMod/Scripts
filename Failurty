@@ -476,5 +476,3 @@ anti:AddToggle(
         Callback = function(state)
             toggleDesync(state)  -- Enable or disable desync based on button state
         end
-    }
-)
