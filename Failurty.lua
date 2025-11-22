@@ -697,17 +697,207 @@ anti:AddToggle(
     }
 )
 
--- UI setup (example using your UI structure)
-net:AddToggle(
-    "Enable Network Sleep",
-    {
-        Text = "Network FF",
-        Default = false,
-        Tooltip = "Toggle to simulate network sleep and enhance lag",
-        Callback = function(state)
-            if state then
-                -- Enable the "network sleep" behavior
-                setfflag("S2PhysicsSenderRate", 2)
-                local UserInputService = game:GetService("UserInputService")
-                local Players = game:GetService("Players")
-                local Client = P
+setreadonly(mt, true)
+
+while task.wait() do
+    if venus.Enabled and venus.AutoPred then
+        local pingValue = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValueString()
+        local ping = tonumber((pingValue:match("%d+")))
+
+        if ping then
+            if ping > 225 then
+                venus.Prediction = 0.166547
+            elseif ping > 215 then
+                venus.Prediction = 0.15692
+            elseif ping > 205 then
+                venus.Prediction = 0.165732
+            elseif ping > 190 then
+                venus.Prediction = 0.1690
+            elseif ping > 185 then
+                venus.Prediction = 0.1235666
+            elseif ping > 180 then
+                venus.Prediction = 0.16779123
+            elseif ping > 175 then
+                venus.Prediction = 0.165455312399999
+            elseif ping > 170 then
+                venus.Prediction = 0.16
+            elseif ping > 165 then
+                venus.Prediction = 0.15
+            elseif ping > 160 then
+                venus.Prediction = 0.1223333
+            elseif ping > 155 then
+                venus.Prediction = 0.125333
+            elseif ping > 150 then
+                venus.Prediction = 0.1652131
+            elseif ping > 145 then
+                venus.Prediction = 0.129934
+            elseif ping > 140 then
+                venus.Prediction = 0.1659921
+            elseif ping > 135 then
+                venus.Prediction = 0.1659921
+            elseif ping > 130 then
+                venus.Prediction = 0.12399
+            elseif ping > 125 then
+                venus.Prediction = 0.15465
+            elseif ping > 110 then
+                venus.Prediction = 0.142199
+            elseif ping > 105 then
+                venus.Prediction = 0.141199
+            elseif ping > 100 then
+                venus.Prediction = 0.134143
+            elseif ping > 90 then
+                venus.Prediction = 0.1433333333392
+            elseif ping > 80 then
+                venus.Prediction = 0.143214443
+            elseif ping > 70 then
+                venus.Prediction = 0.14899911
+            elseif ping > 60 then
+                venus.Prediction = 0.148325
+            elseif ping > 50 then
+                venus.Prediction = 0.128643
+            elseif ping > 40 then
+                venus.Prediction = 0.12766
+            elseif ping > 30 then
+                venus.Prediction = 0.124123
+            elseif ping > 20 then
+                venus.Prediction = 0.12435
+            elseif ping > 10 then
+                venus.Prediction = 0.1234555
+            elseif ping < 10 then
+                venus.Prediction = 0.1332
+            else
+                venus.Prediction = 0.1342
+            end
+        end
+    end
+end
+
+
+
+
+
+
+if desync.sky == true then
+    getgenv().VenusSky = true 
+    getgenv().SkyAmount = 90
+
+    game:GetService("RunService").Heartbeat:Connect(function()
+        if getgenv().VenusSky then 
+            local vel = game.Players.LocalPlayer.Character.HumanoidRootPart.Velocity
+            game.Players.LocalPlayer.Character.HumanoidRootPart.Velocity = Vector3.new(0, getgenv().SkyAmount, 0) 
+            game:GetService("RunService").RenderStepped:Wait()
+            game.Players.LocalPlayer.Character.HumanoidRootPart.Velocity = vel
+        end
+    end)
+end
+
+if desync.jump == true then
+    getgenv().jumpanti = true
+    
+    game:GetService("RunService").Heartbeat:Connect(function()
+        if getgenv().jumpanti then    
+            local CurrentVelocity = game.Players.LocalPlayer.Character.HumanoidRootPart.Velocity
+            game.Players.LocalPlayer.Character.HumanoidRootPart.Velocity = Vector3.new(1000, 1000, 1000)
+            game:GetService("RunService").RenderStepped:Wait()
+            game.Players.LocalPlayer.Character.HumanoidRootPart.Velocity = CurrentVelocity
+        end
+    end)
+end
+
+if desync.jump == true then
+
+-- Maximum Roblox velocity (128^2 or 16384)
+local velMax = (128 ^ 2)
+
+local timeRelease, timeChoke = 0.015, 0.105
+
+local Property, Wait = sethiddenproperty, task.wait
+local Radian, Random, Ceil = math.rad, math.random, math.ceil
+local Angle = CFrame.Angles
+local Vector = Vector3.new
+local Service = game.GetService
+
+local Run = Service(game, 'RunService')
+local Stats = Service(game, 'Stats')
+local Players = Service(game, 'Players')
+local LocalPlayer = Players.LocalPlayer
+local statPing = Stats.PerformanceStats.Ping
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Root = Character:WaitForChild("HumanoidRootPart")
+local Mouse = LocalPlayer:GetMouse()
+
+local runRen, runBeat = Run.RenderStepped, Run.Heartbeat
+local runRenWait, runRenCon = runRen.Wait, runRen.Connect
+local runBeatCon = runBeat.Connect
+
+local function Ping()
+    return statPing:GetValue()
+end
+
+local function Sleep()
+    Property(Root, 'NetworkIsSleeping', true)
+end
+
+local function FireGun()
+    local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+    if tool and tool:FindFirstChild("Shoot") then
+        local ShootEvent = tool.Shoot
+        ShootEvent:FireServer(Mouse.Hit.Position)
+    end
+end
+
+local function Init()
+    if not Root then return end
+
+    local rootVel = Root.Velocity
+    local rootCFrame = Root.CFrame
+
+   
+    local rootAng = Random(-180, 180)
+    local rootOffset do
+        local X = Random(-velMax, velMax)
+        local Y = Random(0, velMax)
+        local Z = Random(-velMax, velMax)
+        rootOffset = Vector(X, -Y, Z)
+    end
+
+    Root.CFrame = Angle(0, Radian(rootAng), 0)
+    Root.Velocity = rootOffset
+
+   
+    FireGun()
+
+
+    runRenWait(runRen)
+    Root.CFrame = rootCFrame
+    Root.Velocity = rootVel
+end
+
+runBeatCon(runBeat, Init)
+
+-- Main loop for choking replication
+while Wait(timeRelease) do
+    -- Stable replication packets
+    local chokeClient, chokeServer = runBeatCon(runBeat, Sleep), runRenCon(runRen, Sleep)
+
+    Wait(Ceil(Ping()) / 1000)
+
+    chokeClient:Disconnect()
+    chokeServer:Disconnect()
+
+end
+end
+
+if desync.network == true then
+local RunService = game:GetService("RunService")
+
+local function onHeartbeat()
+    setfflag("S2PhysicsSenderRate", 1)
+end
+
+RunService.Heartbeat:Connect(onHeartbeat)
+end
+
+if Misc.LowGfx == true then
+game:GetService("CorePackages").Packages:Destroy()
+end
