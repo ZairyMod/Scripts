@@ -1,274 +1,408 @@
+-- Universal Triggerbot for Da Hood Ripoffs (Da Strike, etc.) 2025 by Grok
+-- Works on Mobile/PC | All Features in UI | Mouse/VirtualInput Auto-Detect
+-- Left: Delay, Prediction, Keybind Inputs | Right: Toggles | Close Button
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
 local Camera = workspace.CurrentCamera
 
--- CONFIG (Loaded from UI)
 local Config = {
-    Enabled = true,
-    FOV = 45,
+    Enabled = false,
+    FOV = 60,
     Prediction = 0.13,
-    ShootDelay = 0.12,
-    MaxDistance = 300,
-    PrioritizeHead = true
+    ShootDelay = 0.10,
+    KnifeCheck = false,
+    ForcefieldCheck = false,
+    KnockedCheck = false,
+    AmmoCheck = false,
+    KeybindStr = "RightShift"
 }
 
--- Virtual mouse for mobile
-local function mouse1press()
-    virtualinputmanager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-    task.wait()
-end
-local function mouse1release()
-    virtualinputmanager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+local is_mobile = UserInputService.TouchEnabled
+local virtualinputmanager = getgenv().VirtualInputManager or _G.VirtualInputManager
+local heartbeatConn
+local keybindConn
+
+-- Functions
+local function getCenter()
+    if is_mobile then
+        local size = Camera.ViewportSize
+        return Vector2.new(size.X * 0.5, size.Y * 0.5)
+    else
+        return Vector2.new(Mouse.X, Mouse.Y)
+    end
 end
 
--- Get screen center
-local function GetScreenCenter()
-    return Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+local function worldToScreen(pos)
+    local vec, onScreen = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(vec.X, vec.Y), onScreen
 end
 
--- Predicted position
-local function GetPredictedPosition(part)
-    local velocity = part.AssemblyLinearVelocity or part.Velocity or Vector3.new(0,0,0)
-    local predictedPos = part.Position + (velocity * Config.Prediction)
-    local screenPos, onScreen = Camera:WorldToViewportPoint(predictedPos)
-    return Vector2.new(screenPos.X, screenPos.Y), onScreen
+local function hasAmmo()
+    if not Config.AmmoCheck then return true end
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then return false end
+    local ammo = tool:FindFirstChild("Ammo")
+    if ammo and (ammo:IsA("IntValue") or ammo:IsA("NumberValue")) then
+        return ammo.Value > 0
+    end
+    return true
+end
+
+local function shootInstant()
+    local mx, my = getCenter()
+    if virtualinputmanager then
+        virtualinputmanager:SendMouseButtonEvent(mx, my, 0, true, game, 0)
+        task.wait(0.015)
+        virtualinputmanager:SendMouseButtonEvent(mx, my, 0, false, game, 0)
+    else
+        mous1press()
+        task.wait(0.015)
+        mous1release()
+    end
 end
 
 -- Main Loop
-local heartbeatConnection
-local function StartLoop()
-    heartbeatConnection = RunService.Heartbeat:Connect(function()
-        if not Config.Enabled then return end
-        if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+local canShoot = true
+heartbeatConn = RunService.Heartbeat:Connect(function()
+    if not Config.Enabled or not canShoot then return end
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
 
-        local closestDist = math.huge
-        local target = nil
+    local center = getCenter()
+    local closestDist = Config.FOV
+    local foundTarget = false
 
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player == LocalPlayer then continue end
-            local char = player.Character
-            if not char then continue end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer or not player.Character then continue end
+        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+        local root = player.Character:FindFirstChild("HumanoidRootPart")
+        if not hum or not root then continue end
 
-            local humanoid = char:FindFirstChildOfClass("Humanoid")
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if not humanoid or not root or (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude > Config.MaxDistance then continue end
+        local dist3d = (root.Position - char.HumanoidRootPart.Position).Magnitude
+        if dist3d > 1200 then continue end
 
-            -- KO Check: Skip dead/KO/ragdoll
-            if humanoid.Health <= 0 or humanoid:GetState() == Enum.HumanoidStateType.Dead then continue end
-            if char:FindFirstChild("ForceField") or char:FindFirstChild("Ragdoll") or char:FindFirstChild("KO") then continue end -- Da Strike specifics
+        -- Forcefield Check
+        if Config.ForcefieldCheck and player.Character:FindFirstChild("ForceField") then continue end
 
-            local head = Config.PrioritizeHead and char:FindFirstChild("Head") or root
-            if not head then continue end
+        -- Knocked Check (Da Hood/Da Strike)
+        if Config.KnockedCheck and (hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead or hum.PlatformStand) then continue end
 
-            local screenPos, onScreen = GetPredictedPosition(head)
-            if not onScreen then continue end
+        -- Knife Check
+        local targetTool = player.Character:FindFirstChildOfClass("Tool")
+        if Config.KnifeCheck and targetTool and (string.lower(targetTool.Name):find("knife") or string.lower(targetTool.Name):find("combat")) then continue end
 
-            local distFromCenter = (screenPos - GetScreenCenter()).Magnitude
-            if distFromCenter < closestDist and distFromCenter <= Config.FOV then
-                closestDist = distFromCenter
-                target = head
-            end
+        local targetPart = player.Character:FindFirstChild("Head") or root
+        local vel = root.AssemblyLinearVelocity
+        local predPos = targetPart.Position + (vel * Config.Prediction)
+
+        local screenPos, onScreen = worldToScreen(predPos)
+        if not onScreen then continue end
+
+        local pixelDist = (screenPos - center).Magnitude
+        if pixelDist < closestDist then
+            closestDist = pixelDist
+            foundTarget = true
         end
+    end
 
-        if target then
-            mouse1press()
+    if foundTarget and hasAmmo() then
+        shootInstant()
+        canShoot = false
+        task.spawn(function()
             task.wait(Config.ShootDelay)
-            mouse1release()
-        end
-    end)
-end
+            canShoot = true
+        end)
+    end
+end)
 
-local function StopLoop()
-    if heartbeatConnection then
-        heartbeatConnection:Disconnect()
-        heartbeatConnection = nil
+-- Keybind Update
+local function updateKeybind(str)
+    if keybindConn then keybindConn:Disconnect() end
+    local keyName = str:gsub(" ", ""):upper()
+    local success, keyCode = pcall(function()
+        return Enum.KeyCode[keyName]
+    end)
+    if success and keyCode then
+        keybindConn = UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then return end
+            if input.KeyCode == keyCode then
+                Config.Enabled = not Config.Enabled
+                updateToggles() -- Defined later
+            end
+        end)
+        Config.KeybindStr = str
     end
 end
+updateKeybind(Config.KeybindStr)
 
 -- UI Creation
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "24kOGTB"
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Name = "UniversalTB"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- Main Frame
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 300, 0, 420)
-MainFrame.Position = UDim2.new(0.5, -150, 0.5, -210)
-MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+MainFrame.Size = UDim2.new(0, 380, 0, 380)
+MainFrame.Position = UDim2.new(0.5, -190, 0.5, -190)
+MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 MainFrame.BorderSizePixel = 0
 MainFrame.Parent = ScreenGui
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 12)
-UICorner.Parent = MainFrame
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 16)
+MainCorner.Parent = MainFrame
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 50)
-Title.Position = UDim2.new(0, 0, 0, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "24kOG TB"
-Title.TextColor3 = Color3.fromRGB(255, 215, 0)
-Title.TextScaled = true
-Title.Font = Enum.Font.GothamBold
-Title.Parent = MainFrame
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(0, 162, 255)
+MainStroke.Thickness = 2
+MainStroke.Parent = MainFrame
+
+-- Title Bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 50)
+TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 16)
+TitleCorner.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -60, 1, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "Universal Triggerbot"
+TitleLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+TitleLabel.TextScaled = true
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.Parent = TitleBar
+
+-- Close Button
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 40, 0, 40)
+CloseBtn.Position = UDim2.new(1, -45, 0, 5)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.new(1,1,1)
+CloseBtn.TextScaled = true
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = TitleBar
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0.5, 0)
+CloseCorner.Parent = CloseBtn
+
+CloseBtn.MouseButton1Click:Connect(function()
+    if heartbeatConn then heartbeatConn:Disconnect() end
+    if keybindConn then keybindConn:Disconnect() end
+    ScreenGui:Destroy()
+end)
 
 -- Draggable
-local dragging = false
-local dragStart = nil
-local startPos = nil
-MainFrame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+local dragging, dragStart, startPos
+TitleBar.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
         dragging = true
-        dragStart = input.Position
+        dragStart = inp.Position
         startPos = MainFrame.Position
     end
 end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
+
+UserInputService.InputChanged:Connect(function(inp)
+    if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
+        local delta = inp.Position - dragStart
         MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+
+UserInputService.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end)
 
--- Toggle Enabled
-local EnabledToggle = Instance.new("TextButton")
-EnabledToggle.Size = UDim2.new(1, -20, 0, 45)
-EnabledToggle.Position = UDim2.new(0, 10, 0, 60)
-EnabledToggle.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-EnabledToggle.Text = "Enabled: ON"
-EnabledToggle.TextColor3 = Color3.new(1,1,1)
-EnabledToggle.TextScaled = true
-EnabledToggle.Font = Enum.Font.Gotham
-EnabledToggle.Parent = MainFrame
-local ToggleCorner = Instance.new("UICorner")
-ToggleCorner.CornerRadius = UDim.new(0, 8)
-ToggleCorner.Parent = EnabledToggle
+-- Toggle Button Creator
+local function createToggle(posY, text, callback)
+    local Toggle = Instance.new("TextButton")
+    Toggle.Size = UDim2.new(0, 140, 0, 45)
+    Toggle.Position = UDim2.new(0, 20, 0, posY)
+    Toggle.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    Toggle.Text = text
+    Toggle.TextColor3 = Color3.new(1,1,1)
+    Toggle.TextScaled = true
+    Toggle.Font = Enum.Font.Gotham
+    Toggle.Parent = MainFrame
 
-EnabledToggle.MouseButton1Click:Connect(function()
+    local TCorner = Instance.new("UICorner")
+    TCorner.CornerRadius = UDim.new(0, 12)
+    TCorner.Parent = Toggle
+
+    local TStroke = Instance.new("UIStroke")
+    TStroke.Color = Color3.fromRGB(0, 162, 255)
+    TStroke.Thickness = 1.5
+    TStroke.Parent = Toggle
+
+    Toggle.MouseButton1Click:Connect(callback)
+    return Toggle
+end
+
+-- Main Enabled Toggle
+local EnabledToggle = createToggle(70, "Disabled", function()
     Config.Enabled = not Config.Enabled
-    EnabledToggle.Text = "Enabled: " .. (Config.Enabled and "ON" or "OFF")
-    EnabledToggle.BackgroundColor3 = Config.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
-    if Config.Enabled then StartLoop() else StopLoop() end
+    EnabledToggle.Text = Config.Enabled and "Enabled" or "Disabled"
+    EnabledToggle.BackgroundColor3 = Config.Enabled and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 50, 50)
 end)
 
--- Slider Function
-local function CreateSlider(parent, yPos, label, min, max, default, callback)
-    local SliderFrame = Instance.new("Frame")
-    SliderFrame.Size = UDim2.new(1, -20, 0, 50)
-    SliderFrame.Position = UDim2.new(0, 10, 0, yPos)
-    SliderFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-    SliderFrame.Parent = parent
-    local SCorner = Instance.new("UICorner")
-    SCorner.CornerRadius = UDim.new(0, 8)
-    SCorner.Parent = SliderFrame
+-- Knife Toggle
+local KnifeToggle = createToggle(70, "Knife Check: OFF", function()
+    Config.KnifeCheck = not Config.KnifeCheck
+    KnifeToggle.Text = "Knife Check: " .. (Config.KnifeCheck and "ON" or "OFF")
+    KnifeToggle.BackgroundColor3 = Config.KnifeCheck and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(50, 50, 60)
+end)
+KnifeToggle.Position = UDim2.new(0, 175, 0, 70)
 
+-- Right Toggles
+local ForceToggle = createToggle(130, "Forcefield Check: OFF", function()
+    Config.ForcefieldCheck = not Config.ForcefieldCheck
+    ForceToggle.Text = "Forcefield Check: " .. (Config.ForcefieldCheck and "ON" or "OFF")
+    ForceToggle.BackgroundColor3 = Config.ForcefieldCheck and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(50, 50, 60)
+end)
+ForceToggle.Position = UDim2.new(0, 175, 0, 130)
+
+local KnockedToggle = createToggle(185, "Knocked Check: OFF", function()
+    Config.KnockedCheck = not Config.KnockedCheck
+    KnockedToggle.Text = "Knocked Check: " .. (Config.KnockedCheck and "ON" or "OFF")
+    KnockedToggle.BackgroundColor3 = Config.KnockedCheck and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(50, 50, 60)
+end)
+KnockedToggle.Position = UDim2.new(0, 175, 0, 185)
+
+local AmmoToggle = createToggle(240, "Ammo Check: OFF", function()
+    Config.AmmoCheck = not Config.AmmoCheck
+    AmmoToggle.Text = "Ammo Check: " .. (Config.AmmoCheck and "ON" or "OFF")
+    AmmoToggle.BackgroundColor3 = Config.AmmoCheck and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(50, 50, 60)
+end)
+AmmoToggle.Position = UDim2.new(0, 175, 0, 240)
+
+-- Left Inputs
+local inputY = {140, 195, 250}
+local inputNames = {"Delay", "Prediction", "Keybind"}
+local inputDefaults = {Config.ShootDelay, Config.Prediction, Config.KeybindStr}
+
+for i, name in ipairs(inputNames) do
     local Label = Instance.new("TextLabel")
-    Label.Size = UDim2.new(0.4, 0, 0.5, 0)
-    Label.Position = UDim2.new(0, 10, 0, 5)
+    Label.Size = UDim2.new(0, 80, 0, 30)
+    Label.Position = UDim2.new(0, 25, 0, inputY[i] - 25)
     Label.BackgroundTransparency = 1
-    Label.Text = label .. ": " .. default
+    Label.Text = name .. ":"
     Label.TextColor3 = Color3.new(1,1,1)
     Label.TextScaled = true
     Label.Font = Enum.Font.Gotham
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.Parent = SliderFrame
+    Label.TextXAlignment = Enum.TextXAlignment.Right
+    Label.Parent = MainFrame
 
-    local SliderBar = Instance.new("Frame")
-    SliderBar.Size = UDim2.new(0.55, 0, 0, 6)
-    SliderBar.Position = UDim2.new(0.42, 0, 0.5, 0)
-    SliderBar.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-    SliderBar.Parent = SliderFrame
-    local SBarCorner = Instance.new("UICorner")
-    SBarCorner.CornerRadius = UDim.new(0, 3)
-    SBarCorner.Parent = SliderBar
+    local InputBox = Instance.new("TextBox")
+    InputBox.Size = UDim2.new(0, 140, 0, 40)
+    InputBox.Position = UDim2.new(0, 110, 0, inputY[i])
+    InputBox.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    InputBox.Text = tostring(inputDefaults[i])
+    InputBox.PlaceholderText = "Enter " .. name
+    InputBox.PlaceholderColor3 = Color3.fromRGB(150,150,150)
+    InputBox.TextColor3 = Color3.new(1,1,1)
+    InputBox.TextScaled = true
+    InputBox.Font = Enum.Font.Gotham
+    InputBox.Parent = MainFrame
 
-    local Fill = Instance.new("Frame")
-    Fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-    Fill.Position = UDim2.new(0, 0, 0, 0)
-    Fill.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-    Fill.BorderSizePixel = 0
-    Fill.Parent = SliderBar
-    local FCorner = Instance.new("UICorner")
-    FCorner.CornerRadius = UDim.new(0, 3)
-    FCorner.Parent = Fill
+    local ICorner = Instance.new("UICorner")
+    ICorner.CornerRadius = UDim.new(0, 10)
+    ICorner.Parent = InputBox
 
-    local Knob = Instance.new("TextButton")
-    Knob.Size = UDim2.new(0, 20, 0, 20)
-    Knob.Position = UDim2.new(Fill.Size.X.Scale, -10, 0.5, -10)
-    Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Knob.Text = ""
-    Knob.Parent = SliderBar
-    local KCorner = Instance.new("UICorner")
-    KCorner.CornerRadius = UDim.new(0.5, 0)
-    KCorner.Parent = Knob
+    local IStroke = Instance.new("UIStroke")
+    IStroke.Color = Color3.fromRGB(0, 162, 255)
+    IStroke.Thickness = 1.5
+    IStroke.Parent = InputBox
 
-    local sliding = false
-    Knob.MouseButton1Down:Connect(function()
-        sliding = true
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            sliding = false
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local relativeX = math.clamp((input.Position.X - SliderBar.AbsolutePosition.X) / SliderBar.AbsoluteSize.X, 0, 1)
-            local value = min + (max - min) * relativeX
-            value = math.floor(value * 100) / 100 -- 2 decimal precision
-
-            Fill:TweenSize(UDim2.new(relativeX, 0, 1, 0), "Out", "Quad", 0.1)
-            Knob:TweenPosition(UDim2.new(relativeX, -10, 0.5, -10), "Out", "Quad", 0.1)
-            Label.Text = label .. ": " .. value
-            callback(value)
-        end
-    end)
-
-    callback(default) -- Init
-    return SliderFrame
+    if name == "Keybind" then
+        InputBox.FocusLost:Connect(function(enter)
+            updateKeybind(InputBox.Text)
+        end)
+    else
+        InputBox.FocusLost:Connect(function(enter)
+            local num = tonumber(InputBox.Text)
+            if num and num >= 0 then
+                if name == "Delay" then Config.ShootDelay = num
+                elseif name == "Prediction" then Config.Prediction = math.clamp(num, 0, 0.5) end
+                InputBox.Text = tostring(Config[name:lower()])
+            else
+                InputBox.Text = tostring(inputDefaults[i])
+            end
+        end)
+        InputBox:GetPropertyChangedSignal("Text"):Connect(function()
+            local num = tonumber(InputBox.Text)
+            if num then
+                if name == "Delay" then Config.ShootDelay = num
+                elseif name == "Prediction" then Config.Prediction = math.clamp(num, 0, 0.5) end
+            end
+        end)
+    end
 end
 
--- Create Sliders
-CreateSlider(MainFrame, 115, "FOV", 10, 120, Config.FOV, function(v) Config.FOV = v end)
-CreateSlider(MainFrame, 170, "Prediction", 0.05, 0.25, Config.Prediction, function(v) Config.Prediction = v end)
-CreateSlider(MainFrame, 225, "Shoot Delay", 0.05, 0.3, Config.ShootDelay, function(v) Config.ShootDelay = v end)
-CreateSlider(MainFrame, 280, "Max Dist", 100, 1000, Config.MaxDistance, function(v) Config.MaxDistance = v end)
+-- FOV Input (Bonus - Hidden in left top)
+local FOVLabel = Instance.new("TextLabel")
+FOVLabel.Size = UDim2.new(0, 80, 0, 30)
+FOVLabel.Position = UDim2.new(0, 25, 0, 70)
+FOVLabel.BackgroundTransparency = 1
+FOVLabel.Text = "FOV:"
+FOVLabel.TextColor3 = Color3.new(1,1,1)
+FOVLabel.TextScaled = true
+FOVLabel.Font = Enum.Font.Gotham
+FOVLabel.TextXAlignment = Enum.TextXAlignment.Right
+FOVLabel.Parent = MainFrame
 
--- Head Toggle
-local HeadToggle = Instance.new("TextButton")
-HeadToggle.Size = UDim2.new(1, -20, 0, 45)
-HeadToggle.Position = UDim2.new(0, 10, 0, 340)
-HeadToggle.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-HeadToggle.Text = "Head Priority: ON"
-HeadToggle.TextColor3 = Color3.new(1,1,1)
-HeadToggle.TextScaled = true
-HeadToggle.Font = Enum.Font.Gotham
-HeadToggle.Parent = MainFrame
-local HTCorner = Instance.new("UICorner")
-HTCorner.CornerRadius = UDim.new(0, 8)
-HTCorner.Parent = HeadToggle
+local FOVBox = Instance.new("TextBox")
+FOVBox.Size = UDim2.new(0, 140, 0, 40)
+FOVBox.Position = UDim2.new(0, 110, 0, 65)
+FOVBox.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+FOVBox.Text = tostring(Config.FOV)
+FOVBox.PlaceholderText = "Enter FOV"
+FOVBox.PlaceholderColor3 = Color3.fromRGB(150,150,150)
+FOVBox.TextColor3 = Color3.new(1,1,1)
+FOVBox.TextScaled = true
+FOVBox.Font = Enum.Font.Gotham
+FOVBox.Parent = MainFrame
 
-HeadToggle.MouseButton1Click:Connect(function()
-    Config.PrioritizeHead = not Config.PrioritizeHead
-    HeadToggle.Text = "Head Priority: " .. (Config.PrioritizeHead and "ON" or "OFF")
-    HeadToggle.BackgroundColor3 = Config.PrioritizeHead and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(170, 0, 255)
+local FOVCorner = Instance.new("UICorner")
+FOVCorner.CornerRadius = UDim.new(0, 10)
+FOVCorner.Parent = FOVBox
+
+local FOVStroke = Instance.new("UIStroke")
+FOVStroke.Color = Color3.fromRGB(0, 162, 255)
+FOVStroke.Thickness = 1.5
+FOVStroke.Parent = FOVBox
+
+FOVBox.FocusLost:Connect(function()
+    local num = tonumber(FOVBox.Text)
+    if num and num > 0 then
+        Config.FOV = math.clamp(num, 10, 200)
+        FOVBox.Text = tostring(Config.FOV)
+    else
+        FOVBox.Text = tostring(Config.FOV)
+    end
+end)
+FOVBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local num = tonumber(FOVBox.Text)
+    if num then Config.FOV = math.clamp(num, 10, 200) end
 end)
 
--- Start
-StartLoop()
 game:GetService("StarterGui"):SetCore("SendNotification", {
-    Title = "24kOG TB Loaded";
-    Text = "Full UI draggable | All features adjustable!";
+    Title = "Universal TB Loaded";
+    Text = "Works on Da Hood Ripoffs (Da Strike) | Mobile/PC | Drag to move";
     Duration = 5;
 })
 
-print("🟢 24kOG TB Full UI Loaded! Drag to move.")
+print("🟢 Universal Triggerbot LOADED! | FOV:", Config.FOV, "| Drag UI & Toggle Away!")
